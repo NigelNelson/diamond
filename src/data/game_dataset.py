@@ -28,12 +28,12 @@ class GameDataset(Dataset):
             self.episode_ends = self.episode_ends[:-1]
             self.episode_starts = [0] + [self.episode_ends[i] for i in range(len(self.episode_ends) - 1)]
 
-        self.transform = transforms.Compose([
-            transforms.ToPILImage(),
-            transforms.Resize(image_size, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.ToTensor(),
-            transforms.Lambda(lambda x: x.mul(2).sub(1)),
-        ])
+        # self.transform = transforms.Compose([
+        #     transforms.ToPILImage(),
+        #     transforms.Resize(image_size, interpolation=transforms.InterpolationMode.BILINEAR),
+        #     transforms.ToTensor(),
+        #     transforms.Lambda(lambda x: x.mul(2).sub(1)),
+        # ])
 
         self.root = zarr.open(self.zarr_path, mode='r')
         self.frames = self.root['frames']
