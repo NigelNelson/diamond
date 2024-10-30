@@ -48,7 +48,7 @@ collection:
     num_final_episodes: 100
 
 static_dataset:
-  path: /media/m2/datasets/jigsaw/data/combined_dataset.zarr  # if specified, will disable train/test data collection
+  path: /JIGSAW_data/combined_dataset.zarr  # if specified, will disable train/test data collection
   ignore_sample_weights: True
 
 training:
@@ -86,7 +86,7 @@ denoiser:
     steps_first_epoch: 38 * 8
     steps_per_epoch: 38 * 8
     sample_weights: [0.1, 0.1, 0.1, 0.7]
-    batch_size: 8
+    batch_size: 64
     grad_acc_steps: 1
     lr_warmup_steps: 100
     max_grad_norm: 1.0
