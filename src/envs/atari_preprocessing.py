@@ -10,7 +10,7 @@ from typing import Any, SupportsFloat
 import cv2
 import numpy as np
 
-# import gymnasium as gym
+import gymnasium as gym
 # from gymnasium.core import WrapperActType, WrapperObsType
 # from gymnasium.spaces import Box
 
