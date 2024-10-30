@@ -1,3 +1,4 @@
+#!/bin/bash
 #SBATCH --job-name=surgical_copilot_v1a_3g
 #SBATCH --output=logs/%x_%j.log
 #SBATCH --error=logs/%x_%j.err
