@@ -61,7 +61,7 @@ class Trainer(StateDictMixin):
                 project="SurgicalNGen",
                 config=OmegaConf.to_container(cfg, resolve=True),
                 entity="nigelnel",
-                id="atarti6",
+                id="atarti9",
                 resume="allow"
             )
 
