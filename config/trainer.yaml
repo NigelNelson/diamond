@@ -86,7 +86,7 @@ denoiser:
     steps_first_epoch: 38 * 8
     steps_per_epoch: 38 * 8
     sample_weights: [0.1, 0.1, 0.1, 0.7]
-    batch_size: 64
+    batch_size: 32
     grad_acc_steps: 1
     lr_warmup_steps: 100
     max_grad_norm: 1.0
