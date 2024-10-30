@@ -1,8 +1,8 @@
 from __future__ import annotations
 from typing import Any, Dict, Optional, Tuple
 
-import gymnasium
-from gymnasium.vector import AsyncVectorEnv
+# import gymnasium
+# from gymnasium.vector import AsyncVectorEnv
 import numpy as np
 import torch
 from torch import Tensor

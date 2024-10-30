@@ -1,6 +1,6 @@
 from typing import Dict, List, Tuple
 
-import gymnasium
+# import gymnasium
 import pygame
 
 
