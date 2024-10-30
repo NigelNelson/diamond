@@ -48,7 +48,7 @@ collection:
     num_final_episodes: 100
 
 static_dataset:
-  path: /JIGSAW_data/combined_dataset.zarr  # if specified, will disable train/test data collection
+  path: /JIGSAW_data/combined_dataset1.zarr  # if specified, will disable train/test data collection
   ignore_sample_weights: True
 
 training:

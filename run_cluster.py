@@ -26,7 +26,7 @@ def get_latest_output_dir():
 
 def main():
     # Check if JIGSAW dataset exists
-    jigsaw_path = Path("/JIGSAW_data/combined_dataset.zarr")
+    jigsaw_path = Path("/JIGSAW_data/combined_dataset1.zarr")
     if not jigsaw_path.is_dir():
         print("Combined JIGSAW dataset not found. Running combine.py...")
         combine_result = os.system("python /JIGSAW_data/combine.py")
