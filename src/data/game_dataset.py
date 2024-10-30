@@ -99,7 +99,7 @@ class GameDataset(Dataset):
         ])
 
         # Transform frames
-        context_frames = torch.stack([self.transform(frame) for frame in frames_data])
+        context_frames = torch.stack([self.transform_frame(frame) for frame in frames_data])
 
         # Normalize kinematics
         kinematics_tensor = torch.tensor(kinematics_data, dtype=torch.float32)
@@ -167,7 +167,7 @@ class GameDataset(Dataset):
             ])
 
             # Transform frames
-            context_frames = torch.stack([self.transform(frame) for frame in frames_data])
+            context_frames = torch.stack([self.transform_frame(frame) for frame in frames_data])
 
             # Normalize kinematics
             kinematics_tensor = torch.tensor(kinematics_data, dtype=torch.float32)
@@ -227,6 +227,22 @@ class GameDataset(Dataset):
         kinematics_std = np.clip(kinematics_std, 1e-2, np.inf)  # clipping to avoid very small std
 
         return torch.tensor(kinematics_mean, dtype=torch.float32), torch.tensor(kinematics_std, dtype=torch.float32)
+
+    def transform_frame(self, frame):
+        # Move the transformation logic here
+        frame = torch.from_numpy(frame).float()
+        frame = frame.permute(2, 0, 1)  # HWC to CHW
+        frame = frame / 255.0 * 2.0 - 1.0  # [0,255] to [-1,1]
+        
+        if frame.shape[1:] != self.image_size:
+            frame = torch.nn.functional.interpolate(
+                frame.unsqueeze(0), 
+                size=self.image_size, 
+                mode='bilinear', 
+                align_corners=False
+            ).squeeze(0)
+        
+        return frame
 
 # Usage example:
 # dataset = GameDataset('path/to/your/suturing.zarr', context_length=5, image_size=224)
