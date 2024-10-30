@@ -11,9 +11,6 @@ from .segment import SegmentId
 class Batch:
     obs: torch.ByteTensor
     act: torch.LongTensor
-    rew: torch.FloatTensor
-    end: torch.LongTensor
-    trunc: torch.LongTensor
     mask_padding: torch.BoolTensor
     info: List[Dict[str, Any]]
     segment_ids: List[SegmentId]

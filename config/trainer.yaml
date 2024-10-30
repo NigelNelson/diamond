@@ -9,8 +9,8 @@ hydra:
 
 wandb:
   mode: disabled
-  project: null
-  entity: null
+  project: SurgicalNGen
+  entity: nigelnel
   name: null
   group: null
   tags: null
@@ -23,7 +23,7 @@ initialization:
   load_actor_critic: True
 
 common:
-  devices: 0  # int, list of int, cpu, or all 
+  devices: all  # int, list of int, cpu, or all 
   seed: null
   resume: False # do not modify, set by scripts/resume.sh only.
 
@@ -40,7 +40,7 @@ collection:
       min: 5000
       max: 10000  # null: no maximum
       threshold_rew: 10
-    steps_per_epoch: 100
+    steps_per_epoch: 38
   test:
     num_envs: 1
     num_episodes: 4
@@ -48,25 +48,25 @@ collection:
     num_final_episodes: 100
 
 static_dataset:
-  path: null  # if specified, will disable train/test data collection
+  path: /media/m2/datasets/jigsaw/data/combined_dataset.zarr  # if specified, will disable train/test data collection
   ignore_sample_weights: True
 
 training:
   should: True
-  num_final_epochs: 50
+  num_final_epochs: 100000
   cache_in_ram: True
-  num_workers_data_loaders: 0
+  num_workers_data_loaders: 16
   model_free: False # if True, turn off world_model training and RL in imagination
   compile_wm: True
 
 evaluation:
   should: True
-  every: 10
+  every: 250
 
 world_model_env:
   _target_: envs.WorldModelEnvConfig
-  horizon: 15
-  num_batches_to_preload: 256
+  horizon: 100
+  num_batches_to_preload: 4
   diffusion_sampler:
     _target_: models.diffusion.DiffusionSamplerConfig
     num_steps_denoising: 3
@@ -83,10 +83,10 @@ denoiser:
   training:
     num_autoregressive_steps: 1
     start_after_epochs: 0
-    steps_first_epoch: 10000
-    steps_per_epoch: 400
+    steps_first_epoch: 38 * 8
+    steps_per_epoch: 38 * 8
     sample_weights: [0.1, 0.1, 0.1, 0.7]
-    batch_size: 32
+    batch_size: 8
     grad_acc_steps: 1
     lr_warmup_steps: 100
     max_grad_norm: 1.0

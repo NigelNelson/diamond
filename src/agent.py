@@ -39,11 +39,9 @@ class Agent(nn.Module):
     def setup_training(
         self,
         sigma_distribution_cfg: SigmaDistributionConfig,
-        actor_critic_loss_cfg: ActorCriticLossConfig,
-        rl_env: Union[TorchEnv, WorldModelEnv],
     ) -> None:
         self.denoiser.setup_training(sigma_distribution_cfg)
-        self.actor_critic.setup_training(rl_env, actor_critic_loss_cfg)
+        # self.actor_critic.setup_training(rl_env, actor_critic_loss_cfg)
 
     def load(
         self,

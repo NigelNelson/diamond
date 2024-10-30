@@ -16,9 +16,6 @@ class SegmentId:
 class Segment:
     obs: torch.FloatTensor
     act: torch.LongTensor
-    rew: torch.FloatTensor
-    end: torch.ByteTensor
-    trunc: torch.ByteTensor
     mask_padding: torch.BoolTensor
     info: Dict[str, Any]
     id: SegmentId

@@ -90,6 +90,35 @@ class Denoiser(nn.Module):
         denoised = self.wrap_model_output(noisy_next_obs, model_output, cs)
         return denoised
 
+    def apply_noise_to_context(self, context_latents: torch.Tensor, max_noise_level: float, normalization: str = 'sigmoid') -> torch.Tensor:
+        b, t, c, h, w = context_latents.shape
+        
+        # Generate unique noise levels for each sample in the batch and each context frame
+        noise_level = torch.rand(b, t, 1, 1, 1, device=context_latents.device) * max_noise_level
+        
+        # Expand noise_level to match the shape of context_latents
+        expanded_noise_level = noise_level.expand(-1, -1, c, h, w)
+        
+        # Generate unique noise for each sample in the batch
+        noise = torch.randn_like(context_latents) * expanded_noise_level
+        
+        # Add noise
+        noised_context = context_latents + noise
+        
+        # Normalize the noised context
+        if normalization == 'minmax':
+            # Min-max normalization
+            min_val = noised_context.view(b, t, -1).min(dim=-1, keepdim=True)[0].unsqueeze(-1).unsqueeze(-1)
+            max_val = noised_context.view(b, t, -1).max(dim=-1, keepdim=True)[0].unsqueeze(-1).unsqueeze(-1)
+            noised_context = (noised_context - min_val) / (max_val - min_val + 1e-8)
+        elif normalization == 'sigmoid':
+            # Sigmoid scaling
+            noised_context = torch.sigmoid(noised_context)
+        else:
+            raise ValueError(f"Unknown normalization method: {normalization}")
+        
+        return noised_context
+
     def forward(self, batch: Batch) -> LossAndLogs:
         n = self.cfg.inner_model.num_steps_conditioning
         seq_length = batch.obs.size(1) - n
@@ -102,6 +131,9 @@ class Denoiser(nn.Module):
             next_obs = all_obs[:, n + i]
             act = batch.act[:, i : n + i]
             mask = batch.mask_padding[:, n + i]
+
+            # Apply noise to context frames
+            # obs = self.apply_noise_to_context(obs, max_noise_level=0.3, normalization='sigmoid')
 
             b, t, c, h, w = obs.shape
             obs = obs.reshape(b, t * c, h, w)

@@ -6,7 +6,7 @@ from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ..blocks import Conv3x3, FourierFeatures, GroupNorm, UNet
+from ..blocks import Conv3x3, FourierFeatures, GroupNorm, UNet, ContinuousActionEmbedding
 
 
 @dataclass
@@ -25,9 +25,14 @@ class InnerModel(nn.Module):
         super().__init__()
         self.noise_emb = FourierFeatures(cfg.cond_channels)
         self.act_emb = nn.Sequential(
-            nn.Embedding(cfg.num_actions, cfg.cond_channels // cfg.num_steps_conditioning),
-            nn.Flatten(),  # b t e -> b (t e)
+            ContinuousActionEmbedding(
+                num_actions=cfg.num_actions,
+                embedding_dim=cfg.cond_channels // cfg.num_steps_conditioning,
+                hidden_dim=cfg.cond_channels
+            ),
+            nn.Flatten()  # b t e -> b (t e)
         )
+        
         self.cond_proj = nn.Sequential(
             nn.Linear(cfg.cond_channels, cfg.cond_channels),
             nn.SiLU(),

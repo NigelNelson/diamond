@@ -244,3 +244,24 @@ class UNet(nn.Module):
 
         x = x[..., :h, :w]
         return x, d_outputs, u_outputs
+
+
+## Continous Embeddings
+
+class ContinuousActionEmbedding(nn.Module):
+    def __init__(self, num_actions=16, embedding_dim=768, hidden_dim=1024):
+        super().__init__()
+        self.num_actions = num_actions
+        self.embedding_dim = embedding_dim
+        
+        self.action_network = nn.Sequential(
+            nn.Linear(num_actions, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, embedding_dim),
+            nn.LayerNorm(embedding_dim)
+        )
+
+    def forward(self, actions):
+        return self.action_network(actions)

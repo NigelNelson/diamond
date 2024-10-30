@@ -71,7 +71,8 @@ class StateDictMixin:
     def state_dict(self) -> Dict[str, Any]:
         if not hasattr(self, "_all_fields"):
             self._init_fields()
-        return {k: self._get_field(k) for k in self._all_fields}
+
+        return {k: self._get_field(k) if k not in ["train_dataset", "test_dataset"] else None for k in self._all_fields}
 
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         if not hasattr(self, "_all_fields"):
@@ -84,8 +85,6 @@ class StateDictMixin:
 @dataclass
 class CommonTools(StateDictMixin):
     denoiser: Any
-    rew_end_model: Any
-    actor_critic: Any
 
     def get(self, name: str) -> Any:
         return getattr(self, name)

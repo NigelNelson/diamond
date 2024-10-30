@@ -8,10 +8,11 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 import torch
 from torch.utils.data import DataLoader
+from functools import partial
 
 from agent import Agent
 from coroutines.collector import make_collector, NumToCollect
-from data import BatchSampler, collate_segments_to_batch, Dataset
+from data import BatchSampler, collate_segments_to_batch, Dataset, GameDataset
 from envs import make_atari_env, WorldModelEnv
 from game import ActionNames, DatasetEnv, Game, get_keymap_and_action_names, Keymap, NamedEnv, PlayEnv
 from utils import get_path_agent_ckpt, prompt_atari_game
@@ -80,41 +81,55 @@ def prepare_play_mode(cfg: DictConfig, args: argparse.Namespace) -> Tuple[PlayEn
         cfg.env.train.id = cfg.env.test.id = f"{name}NoFrameskip-v4"
         cfg.world_model_env.horizon = 50
     else:
-        path_ckpt = get_path_agent_ckpt("checkpoints", epoch=-1)
+        path_ckpt = get_path_agent_ckpt("outputs/2024-10-24/11-10-59-greedy/checkpoints", epoch=-1)
+        print(f"Loading checkpoint from {path_ckpt}")
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+
+    c = cfg.denoiser.training
+    seq_length = cfg.agent.denoiser.inner_model.num_steps_conditioning
+    p = Path("/media/m2/datasets/jigsaw/data/suturing.zarr")
+    test_dataset = GameDataset(p, seq_length, (256, 320), validation=True)
     # Real envs
-    train_env = make_atari_env(num_envs=1, device=device, **cfg.env.train)
-    test_env = make_atari_env(num_envs=1, device=device, **cfg.env.test)
+    # train_env = make_atari_env(num_envs=1, device=device, **cfg.env.train)
+    # test_env = make_atari_env(num_envs=1, device=device, **cfg.env.test)
+    make_test_data_loader = partial(
+            DataLoader,
+            dataset=test_dataset,
+            collate_fn=collate_segments_to_batch,
+            num_workers=16,
+            persistent_workers=False
+    )
 
     # Models
-    agent = Agent(instantiate(cfg.agent, num_actions=test_env.num_actions)).to(device).eval()
+    agent = Agent(instantiate(cfg.agent, num_actions=16)).to(device).eval()
     agent.load(path_ckpt)
 
     # Collect for imagination's initialization
     n = args.num_steps_initial_collect
-    dataset = Dataset(Path(f"dataset/{path_ckpt.stem}_{n}"))
-    dataset.load_from_default_path()
-    if len(dataset) == 0:
-        print(f"Collecting {n} steps in real environment for world model initialization.")
-        collector = make_collector(test_env, agent.actor_critic, dataset, epsilon=0)
-        collector.send(NumToCollect(steps=n))
-        dataset.save_to_default_path()
+    # dataset = Dataset(Path(f"dataset/{path_ckpt.stem}_{n}"))
+    # dataset.load_from_default_path()
+    # if len(dataset) == 0:
+    #     print(f"Collecting {n} steps in real environment for world model initialization.")
+    #     collector = make_collector(test_env, agent.actor_critic, dataset, epsilon=0)
+    #     collector.send(NumToCollect(steps=n))
+    #     dataset.save_to_default_path()
 
     # World model environment
-    bs = BatchSampler(dataset, 0, 1, 1, cfg.agent.denoiser.inner_model.num_steps_conditioning, None, False)
-    dl = DataLoader(dataset, batch_sampler=bs, collate_fn=collate_segments_to_batch)
+    # bs = BatchSampler(dataset, 0, 1, 1, cfg.agent.denoiser.inner_model.num_steps_conditioning, None, False)
+    # dl = DataLoader(dataset, batch_sampler=bs, collate_fn=collate_segments_to_batch)
+    dl = make_test_data_loader(batch_size=1, batch_sampler=None)
     wm_env_cfg = instantiate(cfg.world_model_env, num_batches_to_preload=1)
-    wm_env = WorldModelEnv(agent.denoiser, agent.rew_end_model, dl, wm_env_cfg, return_denoising_trajectory=True)
+    wm_env = WorldModelEnv(agent.denoiser, dl, wm_env_cfg, return_denoising_trajectory=True)
 
     envs = [
         NamedEnv("wm", wm_env),
-        NamedEnv("test", test_env),
-        NamedEnv("train", train_env),
+        # NamedEnv("test", test_env),
+        # NamedEnv("train", train_env),
     ]
 
-    env_keymap, env_action_names = get_keymap_and_action_names(cfg.env.keymap)
+    env_keymap, env_action_names = get_keymap_and_action_names("surgical")
     play_env = PlayEnv(
         agent,
         envs,

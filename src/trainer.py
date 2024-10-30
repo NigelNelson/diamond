@@ -12,10 +12,11 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader
 from tqdm import tqdm, trange
 import wandb
+from models.diffusion import DiffusionSampler
 
 from agent import Agent
 from coroutines.collector import make_collector, NumToCollect
-from data import BatchSampler, collate_segments_to_batch, Dataset, DatasetTraverser
+from data import BatchSampler, collate_segments_to_batch, Dataset, DatasetTraverser, GameDataset, GameDatasetTraverser
 from envs import make_atari_env, WorldModelEnv
 from utils import (
     broadcast_if_needed,
@@ -56,9 +57,17 @@ class Trainer(StateDictMixin):
 
         # Init wandb
         if self._rank == 0:
-            try_until_no_except(
-                partial(wandb.init, config=OmegaConf.to_container(cfg, resolve=True), reinit=True, resume=True, **cfg.wandb)
+                wandb.init(
+                project="SurgicalNGen",
+                config=OmegaConf.to_container(cfg, resolve=True),
+                entity="nigelnel",
+                id="atarti6",
+                resume="allow"
             )
+
+            # try_until_no_except(
+            #     partial(wandb.init, config=OmegaConf.to_container(cfg, resolve=True), reinit=True, resume=True, **cfg.wandb)
+            # )
 
         # Flags
         self._is_static_dataset = cfg.static_dataset.path is not None
@@ -91,18 +100,28 @@ class Trainer(StateDictMixin):
         num_workers = cfg.training.num_workers_data_loaders
         use_manager = cfg.training.cache_in_ram and (num_workers > 0)
         p = Path(cfg.static_dataset.path) if self._is_static_dataset else Path("dataset")
-        self.train_dataset = Dataset(p / "train", "train_dataset", cfg.training.cache_in_ram, use_manager)
-        self.test_dataset = Dataset(p / "test", "test_dataset", cache_in_ram=True)
-        self.train_dataset.load_from_default_path()
-        self.test_dataset.load_from_default_path()
+        # self.train_dataset = Dataset(p / "train", "train_dataset", cfg.training.cache_in_ram, use_manager)
+        # self.test_dataset = Dataset(p / "test", "test_dataset", cache_in_ram=True)
+        c = cfg.denoiser.training
+        seq_length = cfg.agent.denoiser.inner_model.num_steps_conditioning + 1 + c.num_autoregressive_steps
 
+        self.train_dataset = GameDataset(p, seq_length, (256, 320))
+        self.test_dataset = GameDataset(p, seq_length, (256, 320), validation=True)
+        print(f"Train dataset: {len(self.train_dataset)}")
+        print(f"Test dataset: {len(self.test_dataset)}")
+        # self.train_dataset.load_from_default_path()
+        # self.test_dataset.load_from_default_path()
+
+        ## MARK: remove envs, as we wonly want diffusion model
         # Envs
-        if self._rank == 0:
-            train_env = make_atari_env(num_envs=cfg.collection.train.num_envs, device=self._device, **cfg.env.train)
-            test_env = make_atari_env(num_envs=cfg.collection.test.num_envs, device=self._device, **cfg.env.test)
-            num_actions = int(test_env.num_actions)
-        else:
-            num_actions = None
+        # if self._rank == 0:
+        #     train_env = make_atari_env(num_envs=cfg.collection.train.num_envs, device=self._device, **cfg.env.train)
+        #     test_env = make_atari_env(num_envs=cfg.collection.test.num_envs, device=self._device, **cfg.env.test)
+        #     num_actions = int(test_env.num_actions)
+        # else:
+        #     num_actions = None
+
+        num_actions = 16
         num_actions, = broadcast_if_needed(num_actions)
 
         # Create models
@@ -113,13 +132,13 @@ class Trainer(StateDictMixin):
             self.agent.load(**cfg.initialization)
 
         # Collectors
-        if not self._is_static_dataset and self._rank == 0:
-            self._train_collector = make_collector(
-                train_env, self.agent.actor_critic, self.train_dataset, cfg.collection.train.epsilon
-            )
-            self._test_collector = make_collector(
-                test_env, self.agent.actor_critic, self.test_dataset, cfg.collection.test.epsilon, reset_every_collect=True
-            )
+        # if not self._is_static_dataset and self._rank == 0:
+        #     self._train_collector = make_collector(
+        #         train_env, self.agent.actor_critic, self.train_dataset, cfg.collection.train.epsilon
+        #     )
+        #     self._test_collector = make_collector(
+        #         test_env, self.agent.actor_critic, self.test_dataset, cfg.collection.test.epsilon, reset_every_collect=True
+        #     )
 
         ######################################################
 
@@ -131,7 +150,8 @@ class Trainer(StateDictMixin):
         def build_lr_sched(name: str) -> torch.optim.lr_scheduler.LambdaLR:
             return get_lr_sched(self.opt.get(name), getattr(cfg, name).training.lr_warmup_steps)
 
-        self._model_names = ["denoiser", "rew_end_model", "actor_critic"]
+        # Only train denoiser
+        self._model_names = ["denoiser"]
         self.opt = CommonTools(*map(build_opt, self._model_names))
         self.lr_sched = CommonTools(*map(build_lr_sched, self._model_names))
 
@@ -147,53 +167,70 @@ class Trainer(StateDictMixin):
             pin_memory_device=str(self._device) if self._use_cuda else "",
         )
 
-        make_batch_sampler = partial(BatchSampler, self.train_dataset, self._rank, self._world_size)
+        make_test_data_loader = partial(
+            DataLoader,
+            dataset=self.test_dataset,
+            collate_fn=collate_segments_to_batch,
+            num_workers=1,
+            persistent_workers=False,
+            pin_memory=self._use_cuda,
+            pin_memory_device=str(self._device) if self._use_cuda else "",
+        )
+
+        # make_batch_sampler = partial(BatchSampler, self.train_dataset, self._rank, self._world_size)
 
         def get_sample_weights(sample_weights: List[float]) -> Optional[List[float]]:
             return None if (self._is_static_dataset and cfg.static_dataset.ignore_sample_weights) else sample_weights
 
-        c = cfg.denoiser.training
-        seq_length = cfg.agent.denoiser.inner_model.num_steps_conditioning + 1 + c.num_autoregressive_steps
-        bs = make_batch_sampler(c.batch_size, seq_length, get_sample_weights(c.sample_weights))
-        dl_denoiser_train = make_data_loader(batch_sampler=bs)
-        dl_denoiser_test = DatasetTraverser(self.test_dataset, c.batch_size, seq_length)
+        # bs = make_batch_sampler(c.batch_size, seq_length, get_sample_weights(c.sample_weights))
+        dl_denoiser_train = make_data_loader(
+            batch_size=cfg.denoiser.training.batch_size,
+            batch_sampler=None,
+            shuffle=True,)
+        dl_denoiser_test = GameDatasetTraverser(self.test_dataset, c.batch_size, seq_length)
+        dl_eval_test = make_test_data_loader(batch_size=8, batch_sampler=None)
 
-        c = cfg.rew_end_model.training
-        bs = make_batch_sampler(c.batch_size, c.seq_length, get_sample_weights(c.sample_weights), can_sample_beyond_end=True)
-        dl_rew_end_model_train = make_data_loader(batch_sampler=bs)
-        dl_rew_end_model_test = DatasetTraverser(self.test_dataset, c.batch_size, c.seq_length)
+        # c = cfg.rew_end_model.training
+        # bs = make_batch_sampler(c.batch_size, c.seq_length, get_sample_weights(c.sample_weights), can_sample_beyond_end=True)
+        # dl_rew_end_model_train = make_data_loader(batch_sampler=bs)
+        # dl_rew_end_model_test = DatasetTraverser(self.test_dataset, c.batch_size, c.seq_length)
 
-        self._data_loader_train = CommonTools(dl_denoiser_train, dl_rew_end_model_train, None)
-        self._data_loader_test = CommonTools(dl_denoiser_test, dl_rew_end_model_test, None)
+        # self._data_loader_train = CommonTools(dl_denoiser_train, dl_rew_end_model_train, None)
+        # self._data_loader_test = CommonTools(dl_denoiser_test, dl_rew_end_model_test, None)
+        self._data_loader_train = CommonTools(dl_denoiser_train)
+        self._data_loader_test = CommonTools(dl_denoiser_test)
+        self._data_loader_eval_test = CommonTools(dl_eval_test)
 
         # RL env
 
-        if self._is_model_free:
-            rl_env = make_atari_env(num_envs=cfg.actor_critic.training.batch_size, device=self._device, **cfg.env.train)
+        # if self._is_model_free:
+        #     rl_env = make_atari_env(num_envs=cfg.actor_critic.training.batch_size, device=self._device, **cfg.env.train)
 
-        else:
-            c = cfg.actor_critic.training
-            sl = cfg.agent.denoiser.inner_model.num_steps_conditioning
-            bs = make_batch_sampler(c.batch_size, sl, get_sample_weights(c.sample_weights))
-            dl_actor_critic = make_data_loader(batch_sampler=bs)
-            wm_env_cfg = instantiate(cfg.world_model_env)
-            rl_env = WorldModelEnv(self.agent.denoiser, self.agent.rew_end_model, dl_actor_critic, wm_env_cfg)
+        # else:
+        # c = cfg.actor_critic.training
+        # sl = cfg.agent.denoiser.inner_model.num_steps_conditioning
+        # bs = make_batch_sampler(c.batch_size, sl, get_sample_weights(c.sample_weights))
+        # dl_actor_critic = make_data_loader(batch_sampler=bs)
+        # wm_env_cfg = instantiate(cfg.world_model_env)
+        # rl_env = WorldModelEnv(self.agent.denoiser, self.agent.rew_end_model, dl_actor_critic, wm_env_cfg)
 
-            if cfg.training.compile_wm:
-                rl_env.predict_next_obs = torch.compile(rl_env.predict_next_obs, mode="reduce-overhead")
-                rl_env.predict_rew_end = torch.compile(rl_env.predict_rew_end, mode="reduce-overhead")
+        # if cfg.training.compile_wm:
+        #     rl_env.predict_next_obs = torch.compile(rl_env.predict_next_obs, mode="reduce-overhead")
+        #     rl_env.predict_rew_end = torch.compile(rl_env.predict_rew_end, mode="reduce-overhead")
 
         # Setup training
         sigma_distribution_cfg = instantiate(cfg.denoiser.sigma_distribution)
-        actor_critic_loss_cfg = instantiate(cfg.actor_critic.actor_critic_loss)
-        self.agent.setup_training(sigma_distribution_cfg, actor_critic_loss_cfg, rl_env)
+        # actor_critic_loss_cfg = instantiate(cfg.actor_critic.actor_critic_loss)
+        # self.agent.setup_training(sigma_distribution_cfg, actor_critic_loss_cfg, rl_env)
+        self.agent.setup_training(sigma_distribution_cfg)
+
 
         # Training state (things to be saved/restored)
         self.epoch = 0
         self.num_epochs_collect = None
         self.num_episodes_test = 0
-        self.num_batch_train = CommonTools(0, 0, 0)
-        self.num_batch_test = CommonTools(0, 0, 0)
+        self.num_batch_train = CommonTools(0)
+        self.num_batch_test = CommonTools(0)
 
         if cfg.common.resume:
             self.load_state_checkpoint()
@@ -203,8 +240,6 @@ class Trainer(StateDictMixin):
         if self._rank == 0:
             for name in self._model_names:
                 print(f"{count_parameters(getattr(self.agent, name))} parameters in {name}")
-            print(self.train_dataset)
-            print(self.test_dataset)
 
     def run(self) -> None:
         to_log = []
@@ -228,14 +263,14 @@ class Trainer(StateDictMixin):
             if self._rank == 0:
                 print(f"\nEpoch {self.epoch} / {num_epochs}\n")
 
-            # Training
-            should_collect_train = (self._rank == 0 and not self._is_model_free and not self._is_static_dataset and self.epoch <= self.num_epochs_collect)
+            # Training # Won't be used
+            # should_collect_train = (self._rank == 0 and not self._is_model_free and not self._is_static_dataset and self.epoch <= self.num_epochs_collect)
 
-            if should_collect_train:
-                c = self._cfg.collection.train
-                to_log += self._train_collector.send(NumToCollect(steps=c.steps_per_epoch))
-            sd_train_dataset, = broadcast_if_needed(self.train_dataset.state_dict())  # update dataset for ranks > 0
-            self.train_dataset.load_state_dict(sd_train_dataset)
+            # if should_collect_train:
+            #     c = self._cfg.collection.train
+            #     to_log += self._train_collector.send(NumToCollect(steps=c.steps_per_epoch))
+            # sd_train_dataset, = broadcast_if_needed(self.train_dataset.state_dict())  # update dataset for ranks > 0
+            # self.train_dataset.load_state_dict(sd_train_dataset)
             
             if self._cfg.training.should:
                 to_log += self.train_agent()
@@ -247,7 +282,7 @@ class Trainer(StateDictMixin):
             if should_collect_test:
                 to_log += self.collect_test()
 
-            if should_test and not self._is_model_free:
+            if should_test and not self._is_model_free and self.epoch % 10 == 0:
                 to_log += self.test_agent()
 
             # Logging
@@ -327,7 +362,7 @@ class Trainer(StateDictMixin):
         self.agent.train()
         self.agent.zero_grad()
         to_log = []
-        model_names = ["actor_critic"] if self._is_model_free else self._model_names
+        model_names = self._model_names
         for name in model_names:
             cfg = getattr(self._cfg, name).training
             if self.epoch > cfg.start_after_epochs:
@@ -339,11 +374,17 @@ class Trainer(StateDictMixin):
     def test_agent(self) -> Logs:
         self.agent.eval()
         to_log = []
-        model_names = [] if self._is_model_free else self._model_names[:-1]
+        model_names = [] if self._is_model_free else self._model_names
         for name in model_names:
             cfg = getattr(self._cfg, name).training
             if self.epoch > cfg.start_after_epochs:
-                to_log += self.test_component(name)
+                print(f"Testing {name}")
+                if name == "denoiser":
+                    self.generate_and_log_samples()
+                else:
+                    to_log += self.test_component(name)
+            else:
+                print(f"Skipping testing {name} as it is not trained yet")
         return to_log
 
     def train_component(self, name: str, steps: int) -> Logs:
@@ -355,13 +396,21 @@ class Trainer(StateDictMixin):
 
         model.train()
         opt.zero_grad()
-        data_iterator = iter(data_loader) if data_loader is not None else None
+        # data_iterator = iter(data_loader) if data_loader is not None else None
         to_log = []
 
-        num_steps = cfg.grad_acc_steps * steps
+        # num_steps = cfg.grad_acc_steps * steps
+        # Calculate the number of iterations
+        dataset_size = len(data_loader.dataset)
+        batch_size = data_loader.batch_size or cfg.batch_size  # Use the dataloader's batch size if available, otherwise use the config
+        num_iterations = (dataset_size + batch_size - 1) // batch_size  # Ceiling division to account for potential incomplete last batch
 
-        for i in trange(num_steps, desc=f"Training {name}", disable=self._rank > 0):
-            batch = next(data_iterator).to(self._device) if data_iterator is not None else None
+        progress_bar = tqdm(data_loader, total=num_iterations, desc=f"Training {name}", disable=self._rank > 0)
+        for i, batch in enumerate(progress_bar):
+
+        # for i in trange(num_steps, desc=f"Training {name}", disable=self._rank > 0):
+            # batch = next(data_iterator).to(self._device) if data_iterator is not None else None
+            batch = batch.to(self._device)
             loss, metrics = model(batch) if batch is not None else model()
             loss.backward()
 
@@ -411,7 +460,47 @@ class Trainer(StateDictMixin):
     def save_checkpoint(self) -> None:
         if self._rank == 0:
             save_with_backup(self.state_dict(), self._path_state_ckpt)
-            self.train_dataset.save_to_default_path()
-            self.test_dataset.save_to_default_path()
+            # self.train_dataset.save_to_default_path()
+            # self.test_dataset.save_to_default_path()
             self._keep_agent_copies(self.agent.state_dict(), self.epoch)
             self._save_info_for_import_script(self.epoch)
+
+    @torch.no_grad()
+    def generate_and_log_samples(self, num_samples: int = 5):
+        print("Generating samples from diffusion model")
+        denoiser = self.agent.denoiser
+        sampler = DiffusionSampler(denoiser, self._cfg.world_model_env.diffusion_sampler)
+        
+        # Extract context (previous observations and actions)
+        n = denoiser.cfg.inner_model.num_steps_conditioning
+        # context_obs = batch.obs[:num_samples, :n]
+        # context_act = batch.act[:num_samples, :n]
+        
+        # Generate samples
+        for i in range(num_samples):
+            batch = next(iter(self._data_loader_eval_test.get("denoiser")))
+            batch = batch.to(self._device)
+            context_obs = batch.obs[:, :n]
+            context_act = batch.act[:, :n]
+            
+            # Sample from the diffusion model
+            sample, trajectory = sampler.sample(context_obs, context_act)
+            
+            # Log context and generated sample
+            for j in range(n):
+                wandb.log({
+                    f"context_{i+1}_{j+1}": wandb.Image(context_obs[0, j].permute(1, 2, 0).cpu().numpy(), caption=f"Context {i+1}.{j+1}"),
+                    "epoch": self.epoch
+                })
+            
+            wandb.log({
+                f"generated_sample_{i+1}": wandb.Image(sample[0].permute(1, 2, 0).cpu().numpy(), caption=f"Generated Sample {i+1}"),
+                "epoch": self.epoch
+            })
+            
+            # Optionally, log the denoising trajectory
+            # for k, traj_sample in enumerate(trajectory):
+            #     wandb.log({
+            #         f"denoising_trajectory_{i+1}_{k+1}": wandb.Image(traj_sample[0].permute(1, 2, 0).cpu().numpy(), caption=f"Denoising Step {i+1}.{k+1}")
+            #     }, step=self.epoch)
+
