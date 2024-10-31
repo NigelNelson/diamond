@@ -58,8 +58,8 @@ def main():
             sys.exit(1)
             
         # Change to the directory containing resume.sh and execute it
-        os.chdir(latest_dir / "scripts")
-        os.system("bash resume.sh")
+        os.chdir(latest_dir)
+        os.system("bash scripts/resume.sh")
 
 if __name__ == "__main__":
     main()
