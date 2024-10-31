@@ -81,7 +81,8 @@ def prepare_play_mode(cfg: DictConfig, args: argparse.Namespace) -> Tuple[PlayEn
         cfg.env.train.id = cfg.env.test.id = f"{name}NoFrameskip-v4"
         cfg.world_model_env.horizon = 50
     else:
-        path_ckpt = get_path_agent_ckpt("outputs/2024-10-24/11-10-59-greedy/checkpoints", epoch=-1)
+        # path_ckpt = get_path_agent_ckpt("outputs/2024-10-24/11-10-59-greedy/checkpoints", epoch=-1)
+        path_ckpt = "/media/m2/holoscan-dev/holoscan-ml/diamond/outputs/cluster/agent_epoch_00134.pt"
         print(f"Loading checkpoint from {path_ckpt}")
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
